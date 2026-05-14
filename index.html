@@ -278,7 +278,7 @@
       <div style="display:flex;align-items:baseline;gap:5px;line-height:1;">
         <span style="font-size:17px;font-weight:800;color:#f76707;letter-spacing:-0.3px;">NOUL</span>
         <span style="font-size:17px;font-weight:700;color:#3CB9F2;letter-spacing:-0.3px;">A&amp;P</span><span style="font-size:17px;font-weight:700;color:#ffffff;letter-spacing:-0.3px;"> Analyzer</span>
-        <span style="font-size:11px;color:#5a6070;font-weight:400;margin-left:2px;">v3.3.08 · 2026-05-13</span>
+        <span style="font-size:11px;color:#5a6070;font-weight:400;margin-left:2px;">v3.3.11 · 2026-05-13</span>
       </div>
       <div id="currentFileName" style="font-size:11px;color:#5a6070;margin-top:2px;display:none;max-width:600px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
     </div>
@@ -406,8 +406,8 @@
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px;">
         <div style="background:var(--bg3);border-radius:10px;padding:18px;border-left:3px solid #ffd43b;">
           <div style="font-size:11px;color:#8b92b8;letter-spacing:0.05em;margin-bottom:6px;">ACCURACY (이송정도)</div>
-          <div style="display:flex;align-items:baseline;gap:4px;">
-            <span style="font-size:16px;color:#ffd43b;font-weight:600;">±</span>
+          <div style="display:flex;align-items:baseline;gap:2px;">
+            <span style="font-size:28px;color:#ffd43b;font-weight:800;">±</span>
             <span id="sum_A" style="font-size:28px;font-weight:800;color:#ffd43b;">—</span>
             <span style="font-size:13px;color:#8b92b8;">&#956;m</span>
           </div>
@@ -415,8 +415,8 @@
         </div>
         <div style="background:var(--bg3);border-radius:10px;padding:18px;border-left:3px solid #69db7c;">
           <div style="font-size:11px;color:#8b92b8;letter-spacing:0.05em;margin-bottom:6px;">REPEATABILITY (반복정도)</div>
-          <div style="display:flex;align-items:baseline;gap:4px;">
-            <span style="font-size:16px;color:#69db7c;font-weight:600;">±</span>
+          <div style="display:flex;align-items:baseline;gap:2px;">
+            <span style="font-size:28px;color:#69db7c;font-weight:800;">±</span>
             <span id="sum_R" style="font-size:28px;font-weight:800;color:#69db7c;">—</span>
             <span style="font-size:13px;color:#8b92b8;">&#956;m</span>
           </div>
@@ -819,12 +819,16 @@ function analyze(pos) {
 
   let curDownIdx = -1;
   let downPassAssigned = new Set();
-  let downSkipNext = false; // T9 완료 후 다음 stop은 T10 → 계산 제외
+  let downSkipNext = false; // T9 완료 후 다음 stop이 T10 위치에 있으면 건너뜀
   downStops.forEach(s => {
+    // T9 완료 직후: 다음 stop이 T9 nominal보다 아래면 T10으로 처리
     if (downSkipNext) {
-      s._isT10 = true; // T10으로 마킹 → 계산 제외
       downSkipNext = false;
-      return;
+      if (s.rep < nominals[nTargets - 1] - stepMm * 0.05) {
+        s._isT10 = true; // T10으로 마킹 → 계산 제외
+        return;
+      }
+      // T9 nominal보다 위 = 다음 패스의 T1 → 정상 배정
     }
     let bestIdx = -1, bestDist = Infinity;
     for (let ti = curDownIdx + 1; ti < nTargets; ti++) {
@@ -861,9 +865,16 @@ function analyze(pos) {
 
   let curUpIdx = nTargets;
   let upPassAssigned = new Set();
+  let upSkipNext = false; // T1 완료 후 다음 stop이 T0 구간이면 건너뜀
   upStops.forEach(s => {
     // T0 구간 정지점은 Up 배정 불가
     if (s.rep > t0Boundary) return;
+
+    // T1 완료 직후: T0 근처(nominals[0] + stepMm*0.5 이상)면 건너뜀
+    if (upSkipNext) {
+      upSkipNext = false;
+      if (s.rep > nominals[0] + stepMm * 0.3) return; // T0 복귀 정지 → skip
+    }
 
     let bestIdx = -1, bestDist = Infinity;
     for (let ti = curUpIdx - 1; ti >= 0; ti--) {
@@ -872,7 +883,7 @@ function analyze(pos) {
       const d = Math.abs(s.rep - nominals[ti]);
       if (d < bestDist) { bestDist = d; bestIdx = ti; }
     }
-    if (bestIdx >= 0 && bestDist < tol) {
+    if (bestIdx >= 0 && bestDist < tol * 0.95) { // 경계값 오배정 방지
       s.targetIdx = bestIdx;
       s.nominal   = nominals[bestIdx];
       s.error     = s.rep - s.nominal;
@@ -881,12 +892,14 @@ function analyze(pos) {
       if (bestIdx === 0) {
         curUpIdx = nTargets;
         upPassAssigned = new Set();
+        upSkipNext = true; // 다음 stop이 T0 복귀면 건너뜀
       }
     } else {
       const nextNom = (curUpIdx - 1 >= 0) ? nominals[curUpIdx - 1] : null;
       if (nextNom !== null && s.rep > nextNom + tol) {
         curUpIdx = nTargets;
         upPassAssigned = new Set();
+        upSkipNext = false;
       }
     }
   });
